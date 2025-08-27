@@ -1,0 +1,67 @@
+1. Chuẩn bị Server
+Cần một máy chủ cài đặt Linux (khuyến nghị Ubuntu Server hoặc CentOS).
+Đảm bảo server có kết nối internet ổn định.
+Có quyền root hoặc sudo.
+2. Cài đặt Asterisk trên Ubuntu
+Bước 1: Cập nhật hệ thống
+bash
+sudo apt update
+sudo apt upgrade -y
+Bước 2: Cài đặt các gói phụ thuộc
+bash
+sudo apt install build-essential git wget subversion -y
+sudo apt install libjansson-dev libxml2-dev uuid-dev libsqlite3-dev -y
+Bước 3: Tải và cài đặt Asterisk
+bash
+cd /usr/src
+sudo wget http://downloads.asterisk.org/pub/telephony/asterisk/asterisk-20-current.tar.gz
+sudo tar xvfz asterisk-20-current.tar.gz
+cd asterisk-20.*
+sudo contrib/scripts/install_prereq install
+sudo ./configure
+sudo make menuselect      # Chọn các module cần thiết (có thể bỏ qua nếu không rõ)
+sudo make
+sudo make install
+sudo make samples         # Tạo file cấu hình mẫu
+sudo make config
+sudo ldconfig
+Bước 4: Khởi động Asterisk
+bash
+sudo systemctl start asterisk
+sudo systemctl enable asterisk
+3. Cấu hình đơn giản SIP và Extension
+Sửa file cấu hình SIP
+bash
+sudo nano /etc/asterisk/sip.conf
+Thêm user:
+
+Code
+[1000]
+type=friend
+secret=matkhau1000
+host=dynamic
+context=default
+Sửa file cấu hình Extension
+bash
+sudo nano /etc/asterisk/extensions.conf
+Thêm dòng:
+
+Code
+[default]
+exten => 1000,1,Dial(SIP/1000)
+4. Mở port trên Firewall
+bash
+sudo ufw allow 5060/udp   # SIP
+sudo ufw allow 10000:20000/udp   # RTP (media)
+5. Cài đặt Softphone trên máy khách
+Tải Zoiper, X-Lite, MicroSIP hoặc app SIP trên điện thoại.
+Cấu hình tài khoản:
+SIP Server: IP Server của bạn
+User: 1000
+Password: matkhau1000
+6. Kiểm tra kết nối
+Đăng nhập bằng softphone.
+Gọi thử giữa các extension.
+Kiểm tra log bằng lệnh:
+bash
+sudo asterisk -rvv
