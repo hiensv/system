@@ -1,0 +1,179 @@
+# Sổ tay Checkmk — Tóm lược triển khai & vận hành
+
+> Bản ghi chú ngắn gọn theo 6 mục: phương thức thu thập dữ liệu, tài nguyên/dịch vụ thường giám sát, ngưỡng cảnh báo, kênh thông báo, giám sát website/SSL và checklist thực hành.
+
+---
+
+## Mục lục
+- [1) Thu thập dữ liệu (Monitoring methods)](#1-thu-thập-dữ-liệu-monitoring-methods)
+- [2) Tài nguyên & dịch vụ thường giám sát](#2-tài-nguyên--dịch-vụ-thường-giám-sát)
+- [3) Ngưỡng cảnh báo (Thresholds & Alerts)](#3-ngưỡng-cảnh-báo-thresholds--alerts)
+- [4) Notifications (Cảnh báo đi đâu)](#4-notifications-cảnh-báo-đi-đâu)
+- [5) Thực tế giám sát Website & SSL](#5-thực-tế-giám-sát-website--ssl)
+- [6) Checklist thực hành](#6-checklist-thực-hành)
+- [Phụ lục: Ghi chú & lệnh nhanh](#phụ-lục-ghi-chú--lệnh-nhanh)
+
+---
+
+## 1) Thu thập dữ liệu (Monitoring methods)
+
+**Các hình thức Checkmk lấy dữ liệu:**
+- **Agent-based (Checkmk agent):** cài agent trên Windows/Linux/Unix để lấy số liệu chi tiết OS (CPU, RAM, FS, process, systemd, logwatch…). Kết nối bảo mật bằng controller (`cmk-agent-ctl`). Phù hợp cho **server/VM**.
+- **SNMP:** dùng cho **thiết bị mạng** (switch/router/firewall/AP…). Thiết lập đơn giản, dữ liệu phụ thuộc MIB của hãng.
+- **Special Agent / API:** cho hệ thống có **API quản trị** (vSphere/vCenter, Proxmox VE, AWS/Azure/GCP, v.v.) – thường giàu dữ liệu hơn SNMP và sinh ra **piggyback** cho VM/containers.
+- **Piggyback:** cơ chế “gắn kèm” số liệu của đối tượng B/C… lấy được từ A (thường gặp ở ảo hoá/cloud).
+- **Active checks (HTTP/TCP/SMTP/…):** kiểm dịch vụ mạng từ bên ngoài (website, cổng TCP, mail, DNS…).
+
+**Agent-based vs SNMP (tóm tắt):**
+- Agent cho dữ liệu **chi tiết cấp OS**, ít phụ thuộc vendor; ưu tiên cho **server/VM**.
+- SNMP hợp với **thiết bị mạng**; số liệu tuỳ MIB, không can thiệp vào OS.
+
+**Khi dùng Special agent/API thay vì cài agent?**
+- Thiết bị/appliance **không cài được agent** (vCenter, Proxmox node, cloud managed services).
+- API cung cấp **metrics phong phú/chính xác** (VM/host/storage/cluster) hơn so với SNMP.
+
+---
+
+## 2) Tài nguyên & dịch vụ thường giám sát
+
+**Ubuntu server (qua agent) thường giám sát:**
+- CPU utilization/load, RAM/swap, filesystem & inodes, I/O, network interfaces.
+- Thời gian/NTP, phiên đăng nhập, process & **systemd units**, log (Logwatch).
+- Tình trạng cập nhật hệ thống (plugin `mk_apt`).
+
+**Dịch vụ phổ biến trên Ubuntu giám sát qua agent:**
+- `sshd`, `nginx`/`apache2`, `mysql`/`postgresql`, `docker`/`podman`, các service của ứng dụng (systemd).
+
+**AlmaLinux khác Ubuntu ở điểm nào (mặc định):**
+- Hệ quản trị gói: **YUM/DNF** thay vì APT ⇒ dùng plugin/check tương ứng cho cập nhật.
+- Còn lại (systemd, metrics cơ bản) **tương tự** Ubuntu.
+
+**SNMP cho Proxmox node, MikroTik, Firewall — theo dõi được gì?**
+- **Proxmox**: khuyến nghị **Special agent Proxmox VE** (node, VM/LXC, storage, cluster); nếu SNMP thì cơ bản CPU/RAM/IF traffic.
+- **MikroTik**: băng thông/gói lỗi trên interface, CPU/RAM, nhiệt độ/điện áp; có thể đọc **wireless signal** tuỳ model.
+- **Firewall (ví dụ FortiGate/…):** interface counters, CPU/RAM/sessions, sensors (nhiệt/nguồn/quạt), trạng thái HA, phiên bản/chữ ký… tuỳ MIB.
+
+---
+
+## 3) Ngưỡng cảnh báo (Thresholds & Alerts)
+
+**Giá trị “thường dùng”:**
+- **Disk / Filesystem:** WARN **80%**, CRIT **90%** (phổ biến & an toàn).
+- **CPU:** tuỳ môi trường; thường đặt WARN **70–85%**, CRIT **85–95%** cùng **trung bình theo thời gian** (ví dụ 15 phút) để giảm nhiễu.
+- **RAM:** trên Linux nên dựa vào **commit/virtual** thay vì “free RAM tuyệt đối”. Thực tế hay đặt WARN **80–90%**, CRIT **90–95%** tuỳ tải.
+
+> Lưu ý: Mặc định có thể khác nhau theo phiên bản/check. Luôn kiểm tra **Parameters for this service** của service tương ứng trong UI.
+
+**Cách chỉnh CPU hoặc RAM về 70% (ví dụ):**
+1. Vào **Setup → Service monitoring rules**.
+2. Chọn rule:
+   - **CPU utilization** (*kernel_util*): bật **Levels** theo %, hoặc áp dụng **average over time** (ví dụ 15 phút).
+   - **Usage of physical and virtual memory** (*mem_used*): đặt ngưỡng theo %/MB.
+3. Áp phạm vi (folder/host tag), **Save → Activate changes**.
+
+**Vì sao tránh đặt ngưỡng quá thấp?**
+- Dẫn tới **alert fatigue**, flapping; khó phân biệt sự cố thật. Hãy dùng ngưỡng hợp lý + **trung bình theo thời gian** hoặc lịch **theo khung giờ** nếu tải theo chu kỳ.
+
+---
+
+## 4) Notifications (Cảnh báo đi đâu)
+
+**Các kênh cảnh báo thường dùng:**
+- **Email** (mặc định), **Telegram**, **Slack**, **Microsoft Teams (webhook)**,
+- **PagerDuty**, **Opsgenie**, **ServiceNow**, **Pushover**, **SIGNL4**…
+
+**Cấu hình cảnh báo qua Telegram (tóm tắt):**
+1. Tạo **Telegram Bot** (BotFather) → lấy **API token**; xác định **chat_id** (nhóm/ cá nhân).
+2. Cài **notification plugin Telegram** (từ Checkmk Exchange/GitHub/blog cộng đồng).
+3. **Setup → Events → Notifications → Rules**:
+   - Chọn phương thức **Telegram**, nhập token/chat_id.
+   - Chọn **states** (PROBLEM/RECOVERY), lọc host/service nếu cần.
+   - **Activate changes** & test.
+
+**Hai kênh doanh nghiệp hay dùng ngoài Telegram:** **Slack** và **Microsoft Teams** (qua webhook chính thức).
+
+---
+
+## 5) Thực tế giám sát Website & SSL
+
+**Giám sát website qua HTTPS:**
+- Dùng **Active check → Check HTTP service**:
+  - Host/URL, port **443**, SNI/virtual host nếu cần.
+  - Kiểm nội dung (string match), thời gian đáp ứng, mã trạng thái…
+
+**Kiểm tra chứng chỉ SSL:**
+- Trong `Check HTTP service`, bật **SSL certificate age** để cảnh báo khi còn *< X ngày*.
+- Ghi nhận issuer/CN/độ hợp lệ trong quá trình handshake.
+
+**Ví dụ:** đặt *warn 14 ngày, crit 7 ngày*. Khi chứng chỉ còn **5 ngày**, service sẽ **CRIT** theo ngưỡng.
+
+---
+
+## 6) Checklist thực hành
+
+### A. Thêm **1 Ubuntu** & **1 AlmaLinux** (agent)
+1. Tải agent từ **Setup → Agents → Linux**.
+2. Cài gói:
+   ```bash
+   # Ubuntu
+   sudo dpkg -i check-mk-agent_*.deb
+
+   # AlmaLinux
+   sudo rpm -Uvh check-mk-agent-*.rpm
+   ```
+3. **Đăng ký controller** tới site:
+   ```bash
+   sudo cmk-agent-ctl register -s <SITE_FQDN> -i <site_id> -H <hostname> -p <tcp_port> --trust-cert
+   ```
+4. Trên UI: vào host → **Full service discovery** → **Activate changes**.
+5. (Tuỳ chọn) Plugin cập nhật:
+   - Ubuntu: copy `mk_apt` vào `/usr/lib/check_mk_agent/plugins/` rồi `chmod +x`.
+   - AlmaLinux: plugin YUM/DNF tương ứng.
+
+### B. Thêm **thiết bị mạng** (SNMP)
+1. Bật SNMP (v2c/v3) trên thiết bị (MikroTik/FortiGate/…).
+2. Trong Checkmk tạo host → **Monitoring agent: SNMP** → khai community/cred.
+3. **Service discovery** → kiểm tra interface, CPU/RAM, sensors…
+4. **MikroTik**: có thể thêm wireless signal nếu MIB/model hỗ trợ.
+
+### C. **Proxmox VE**
+1. Dùng **Special agent Proxmox VE** (Setup → Agents → VM/Cloud/Container → Proxmox VE).
+2. Nhập URL & API token (quyền đọc).
+3. Bật **Piggyback** để tự phát hiện VM/LXC.
+4. Discover & kiểm tra node/VM/storage.
+
+### D. Đặt **ngưỡng & giảm nhiễu**
+- **Filesystem**: tạo rule *Filesystems (used space and growth)* → WARN **80%** / CRIT **90%**.
+- **CPU**: rule *CPU utilization* → WARN **70%**, CRIT **85%**, **Average over 15m**.
+- **RAM (Linux)**: rule *Usage of physical and virtual memory* → đặt theo nhu cầu (ví dụ WARN **85%**, CRIT **95%**).
+- Xem **Parameters for this service** để xác nhận các mức đang áp dụng.
+
+### E. **Notifications → Telegram**
+1. Bot token & chat_id sẵn sàng.
+2. Cài plugin Telegram.
+3. Tạo **Notification rule** → chọn Telegram → lọc host/service → **Activate**.
+4. Gửi **test notification** để xác thực.
+
+---
+
+## Phụ lục: Ghi chú & lệnh nhanh
+
+- Kiểm tra agent tại host:
+  ```bash
+  telnet <host> 6556    # hoặc nc <host> 6556
+  ```
+- Kiểm tra agent controller:
+  ```bash
+  cmk-agent-ctl status
+  cmk-agent-ctl list
+  cmk-agent-ctl help
+  ```
+- Gợi ý đặt ngưỡng:
+  - Dùng **threshold theo thời gian** (average) để hạn chế spike ngắn.
+  - Cân nhắc lịch tải theo giờ làm việc để tránh cảnh báo “ảo”.
+- Nguyên tắc chọn phương thức giám sát:
+  - **Server/VM → Agent**; **Thiết bị mạng → SNMP**; **Nền tảng/appliance → Special agent/API (+Piggyback)**.
+
+---
+
+*Soạn ngày: 2025-09-09 (Asia/Bangkok).* 
