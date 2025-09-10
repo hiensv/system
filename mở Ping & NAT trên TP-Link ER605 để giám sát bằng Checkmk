@@ -1,0 +1,89 @@
+# Hướng dẫn mở Ping & NAT trên TP-Link ER605 để giám sát bằng Checkmk
+
+## 1. Kiểm tra IP và phân biệt WAN / LAN
+- **LAN IP**: `192.168.8.1` → ping trong LAN OK.
+- **WAN IP**: `222.252.10.125` → là IP Public, Checkmk đang dùng để test nhưng bị timeout.
+
+👉 Nếu Checkmk server nằm trong LAN → dùng LAN IP (192.168.8.1).  
+👉 Nếu Checkmk server ở ngoài Internet → cần mở ping & dịch vụ qua WAN IP.
+
+---
+
+## 2. Nguyên nhân ping WAN IP thất bại
+- Mặc định router **chặn ICMP từ WAN**.
+- Trong cấu hình **Packet Anomaly Defense** có tick mục **Block Ping from WAN**.
+- Do đó, Checkmk ping `222.252.10.125` luôn 100% loss.
+
+---
+
+## 3. Mở Ping từ WAN
+1. Đăng nhập router qua `192.168.8.1`.
+2. Vào **Firewall → Attack Defense**.
+3. **Bỏ chọn** mục **Block Ping from WAN**.
+4. Save & Apply.
+5. Kiểm tra lại bằng lệnh:
+   ```bash
+   ping 222.252.10.125
+   ```
+
+---
+
+## 4. Mở Port cho SNMP hoặc Checkmk Agent (NAT)
+Nếu muốn Checkmk monitor chi tiết bằng **SNMP (161/UDP)** hoặc **Agent (6556/TCP)**:
+
+1. Vào **Transmission → NAT → Virtual Server**.
+2. Bấm **Add**, điền như sau:
+
+### Ví dụ SNMP (161/UDP)
+- Name: `SNMP`
+- Interface: `WAN`
+- WAN IP: để trống hoặc chọn `222.252.10.125`
+- External Port: `161`
+- Internal Port: `161`
+- Internal Server IP: `192.168.8.1`
+- Protocol: `UDP`
+- Status: `Enable`
+
+### Ví dụ Checkmk Agent (6556/TCP)
+- Name: `Checkmk-Agent`
+- Interface: `WAN`
+- WAN IP: `222.252.10.125`
+- External Port: `6556`
+- Internal Port: `6556`
+- Internal Server IP: `192.168.8.1`
+- Protocol: `TCP`
+- Status: `Enable`
+
+3. Save & Apply.
+
+---
+
+## 5. Kiểm tra từ Checkmk server
+- Test ping:
+  ```bash
+  ping 222.252.10.125
+  ```
+- Test SNMP:
+  ```bash
+  snmpwalk -v2c -c public 222.252.10.125
+  ```
+- Test Checkmk Agent:
+  ```bash
+  telnet 222.252.10.125 6556
+  ```
+
+---
+
+## 6. Bảo mật
+- Khi mở ping/port ra ngoài, toàn Internet đều có thể scan thấy.
+- Khuyến nghị:
+  - Tạo **Access Control (ACL)** chỉ cho phép IP Checkmk server.
+  - Hoặc triển khai **VPN** để Checkmk giám sát LAN IP (192.168.8.1).
+- Chỉ nên mở các dịch vụ thực sự cần thiết.
+
+---
+
+## 7. Kết luận
+- Nếu chỉ cần biết router có hoạt động hay không → mở **Respond to Ping on WAN**.
+- Nếu cần monitor sâu (CPU, RAM, traffic) → mở **SNMP** hoặc **Checkmk Agent** qua NAT.
+- Luôn kết hợp với **ACL** để đảm bảo an toàn.
