@@ -1,0 +1,115 @@
+# 📘 Hướng dẫn cấu hình Checkmk gửi cảnh báo qua Telegram
+
+## 1. Chuẩn bị
+- Đã cài Checkmk server và tạo site (ví dụ: `hpa`).  
+- Có tài khoản Telegram.  
+- Tạo **Bot Telegram** bằng BotFather.  
+  - `/newbot` → đặt tên + username (phải kết thúc bằng `bot`).  
+  - Nhận **API Token** (ví dụ: `8227933247:AAH8B2L2e_mPk0h4UEiuQhdlPrbN708IWiU`).  
+- Chat riêng với bot, gõ `/start` để bot có thể nhắn lại.  
+- Lấy **Chat ID** bằng API:  
+  ```bash
+  https://api.telegram.org/bot<TOKEN>/getUpdates
+  ```
+  Kết quả JSON cho thấy:
+  ```json
+  "chat": {
+      "id": 5206335495,
+      "type": "private"
+  }
+  ```
+  → Chat ID = `5206335495`.
+
+---
+
+## 2. Test nhanh với curl
+```bash
+TOKEN="8227933247:AAH8B2L2e_mPk0h4UEiuQhdlPrbN708IWiU"
+CHAT_ID="5206335495"
+
+curl -v -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+  -d chat_id="${CHAT_ID}"   --data-urlencode "text=Checkmk test OK ✅"
+```
+✔ Nếu nhận tin trong Telegram → Token + Chat ID chuẩn.
+
+---
+
+## 3. Tạo script notifier trong site Checkmk
+Trong site user (ví dụ `OMD[hpa]:~$`):
+
+```bash
+nano ~/local/share/check_mk/notifications/telegram
+```
+
+Nội dung script:
+
+```bash
+#!/bin/bash
+# Telegram notifier for Checkmk (private chat)
+
+set -euo pipefail
+
+TOKEN="8227933247:AAH8B2L2e_mPk0h4UEiuQhdlPrbN708IWiU"
+CHAT_ID="5206335495"   # Chat riêng với user (đã /start bot)
+
+TITLE="${NOTIFY_WHAT^^} ${NOTIFY_STATE} on ${NOTIFY_HOSTNAME}"
+[ -n "${NOTIFY_SERVICEDESC:-}" ] && TITLE="Service ${NOTIFY_SERVICEDESC} ${NOTIFY_STATE} on ${NOTIFY_HOSTNAME}"
+
+BODY=$'Time: '"${NOTIFY_DATE:-}"$'\nSite: '"${OMD_SITE:-}"$'\nHost: '"${NOTIFY_HOSTNAME:-}"$'\nIPv4: '"${NOTIFY_HOSTADDRESS:-}"$'\nService: '"${NOTIFY_SERVICEDESC:-}"$'\nSummary: '"${NOTIFY_SHORTINFO:-}"
+
+curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+  -d chat_id="${CHAT_ID}" \
+  --data-urlencode "text=${TITLE}\n${BODY}"
+
+exit 0
+```
+
+Cấp quyền thực thi:
+```bash
+chmod +x ~/local/share/check_mk/notifications/telegram
+```
+
+---
+
+## 4. Cấu hình Notification Rule trong Checkmk
+- Vào GUI → **Setup → Events → Notifications → Add rule**  
+- **Notification Method (plug-in):** chọn `telegram` (script vừa tạo)  
+- **Recipient:** chọn user nhận cảnh báo (vd: `cmkadmin`)  
+- Save → **Activate Changes**
+
+---
+
+## 5. Kiểm tra hoạt động
+- Trong GUI → **Test notification** cho 1 host/service.  
+- Mở log site:
+  ```bash
+  tail -n 200 -f ~/var/log/notify.log
+  ```
+  ✔ Nếu thấy:
+  ```
+  executing .../notifications/telegram
+  Plugin exited with code 0
+  ```
+  → Thành công.  
+- Đồng thời tin nhắn sẽ tới Telegram:
+  ```
+  SERVICE CRITICAL on Ubuntu01
+  Time: 2025-09-11 10:22
+  Site: hpa
+  Host: Ubuntu01
+  IPv4: 192.168.1.10
+  Service: CPU load
+  Summary: Load=12.0
+  ```
+
+---
+
+## 6. Lưu ý
+- Nếu gửi cho **group** → Chat ID phải có dạng `-100xxxxxxxxxx`.  
+- Nếu gửi cho user → phải /start bot trước (bạn đã làm).  
+- Có thể tạo nhiều script `telegram-noc`, `telegram-admin` với Chat ID khác nhau để gửi tới nhiều kênh.  
+- Để debug lỗi, bỏ `>/dev/null 2>&1` trong script để thấy thông báo API.  
+
+---
+
+✅ Sau khi hoàn thành, Checkmk sẽ tự động gửi cảnh báo (DOWN, WARN, CRIT, RECOVERY) trực tiếp về Telegram của bạn.  
